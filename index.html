@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <script src="https://unpkg.com/konva@9.3.12/konva.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <meta charset="utf-8" />
+    <title>Konva Image on PDF</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            flex-direction: column;
+        }
+
+        #controls {
+            position: fixed;
+            top: 10px;
+            z-index: 10;
+        }
+
+        #pdf-canvas {
+            margin-top: 20px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        #container {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .anchor {
+            fill: #ddd;
+            stroke: #666;
+            strokeWidth: 2;
+            radius: 8;
+            draggable: true;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="controls">
+        <input type="file" id="fileInput" accept="application/pdf" />
+        <button id="prevPage">Previous</button>
+        <button id="nextPage">Next</button>
+        <input type="file" id="imageInput" accept="image/*" disabled />
+    </div>
+    <div style="position: relative;">
+        <canvas id="pdf-canvas"></canvas>
+        <div id="container"></div>
+    </div>
+    <script>
+        var pdfDoc = null;
+        var currentPage = 1;
+        var totalPages = 0;
+        var pdfCanvas = document.getElementById('pdf-canvas');
+        var pdfCtx = pdfCanvas.getContext('2d');
+        var fileInput = document.getElementById('fileInput');
+        var prevPageButton = document.getElementById('prevPage');
+        var nextPageButton = document.getElementById('nextPage');
+        var imageInput = document.getElementById('imageInput');
+        var stage, layer;
+        var anchors = []; // Array to store anchor points
+
+        function renderPage(pageNum) {
+            pdfDoc.getPage(pageNum).then(function (page) {
+                var viewport = page.getViewport({ scale: 1 });
+                pdfCanvas.height = viewport.height;
+                pdfCanvas.width = viewport.width;
+
+                var renderContext = {
+                    canvasContext: pdfCtx,
+                    viewport: viewport
+                };
+                page.render(renderContext).promise.then(function () {
+                    // PDF is rendered, now add Konva stage on top
+                    if (!stage) {
+                        stage = new Konva.Stage({
+                            container: 'container',
+                            width: viewport.width,
+                            height: viewport.height,
+                        });
+
+                        layer = new Konva.Layer();
+                        stage.add(layer);
+                    } else {
+                        stage.width(viewport.width);
+                        stage.height(viewport.height);
+                        layer.destroyChildren();
+                    }
+                    layer.draw();
+                });
+            });
+        }
+
+        function addAnchors(x, y, width, height) {
+            // Clear previous anchors
+            anchors.forEach(function (anchor) {
+                anchor.destroy();
+            });
+            anchors = [];
+
+            // Add new anchors
+            var topLeft = new Konva.Circle({
+                x: x,
+                y: y,
+                radius: 8,
+                fill: '#ddd',
+                stroke: '#666',
+                strokeWidth: 2,
+                name: 'topLeft',
+                draggable: true,
+                dragOnTop: false
+            });
+            var topRight = new Konva.Circle({
+                x: x + width,
+                y: y,
+                radius: 8,
+                fill: '#ddd',
+                stroke: '#666',
+                strokeWidth: 2,
+                name: 'topRight',
+                draggable: true,
+                dragOnTop: false
+            });
+            var bottomRight = new Konva.Circle({
+                x: x + width,
+                y: y + height,
+                radius: 8,
+                fill: '#ddd',
+                stroke: '#666',
+                strokeWidth: 2,
+                name: 'bottomRight',
+                draggable: true,
+                dragOnTop: false
+            });
+            var bottomLeft = new Konva.Circle({
+                x: x,
+                y: y + height,
+                radius: 8,
+                fill: '#ddd',
+                stroke: '#666',
+                strokeWidth: 2,
+                name: 'bottomLeft',
+                draggable: true,
+                dragOnTop: false
+            });
+
+            anchors = [topLeft, topRight, bottomRight, bottomLeft];
+
+            anchors.forEach(function (anchor) {
+                anchor.on('dragmove', function () {
+                    update(this);
+                });
+                layer.add(anchor);
+            });
+        }
+
+        function update(activeAnchor) {
+            var group = activeAnchor.getParent();
+            var topLeft = group.findOne('.topLeft');
+            var topRight = group.findOne('.topRight');
+            var bottomRight = group.findOne('.bottomRight');
+            var bottomLeft = group.findOne('.bottomLeft');
+            var image = group.findOne('Image');
+
+            var anchorX = activeAnchor.x();
+            var anchorY = activeAnchor.y();
+
+            // update anchor positions
+            switch (activeAnchor.getName()) {
+                case 'topLeft':
+                    topRight.y(anchorY);
+                    bottomLeft.x(anchorX);
+                    break;
+                case 'topRight':
+                    topLeft.y(anchorY);
+                    bottomRight.x(anchorX);
+                    break;
+                case 'bottomRight':
+                    bottomLeft.y(anchorY);
+                    topRight.x(anchorX);
+                    break;
+                case 'bottomLeft':
+                    bottomRight.y(anchorY);
+                    topLeft.x(anchorX);
+                    break;
+            }
+
+            // update image position and size
+            var newWidth = topRight.x() - topLeft.x();
+            var newHeight = bottomLeft.y() - topLeft.y();
+            image.position(topLeft.position());
+            image.width(newWidth);
+            image.height(newHeight);
+
+            layer.batchDraw();
+        }
+
+        fileInput.addEventListener('change', function (event) {
+            var file = event.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                var fileReader = new FileReader();
+                fileReader.onload = function () {
+                    var pdfData = new Uint8Array(this.result);
+
+                    // Load PDF
+                    pdfjsLib.getDocument({ data: pdfData }).promise.then(function (pdf) {
+                        pdfDoc = pdf;
+                        totalPages = pdf.numPages;
+                        currentPage = 1;
+                        renderPage(currentPage);
+                        imageInput.disabled = false; // Enable image input
+                    });
+                };
+                fileReader.readAsArrayBuffer(file);
+            }
+        });
+
+        prevPageButton.addEventListener('click', function () {
+            if (currentPage <= 1) return;
+            currentPage--;
+            renderPage(currentPage);
+        });
+
+        nextPageButton.addEventListener('click', function () {
+            if (currentPage >= totalPages) return;
+            currentPage++;
+            renderPage(currentPage);
+        });
+
+        imageInput.addEventListener('change', function (event) {
+            var file = event.target.files[0];
+            if (file) {
+                var reader = new FileReader();
+                reader.onload = function (e) {
+                    var img = new Image();
+                    img.onload = function () {
+                        // Clear previous anchors before adding new image
+                        anchors.forEach(function (anchor) {
+                            anchor.destroy();
+                        });
+                        anchors = [];
+
+                        var konvaImage = new Konva.Image({
+                            image: img,
+                            x: 50,
+                            y: 50,
+                            width: img.width / 2,
+                            height: img.height / 2,
+                            draggable: true,
+                        });
+
+                        layer.add(konvaImage);
+                        addAnchors(konvaImage.x(), konvaImage.y(), konvaImage.width(), konvaImage.height());
+
+                        konvaImage.on('dragmove', function (e) {
+                            updateAnchors(this);
+                            layer.batchDraw();
+                        });
+
+                        layer.batchDraw();
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        function updateAnchors(image) {
+            var topLeft = anchors.find(function (anchor) { return anchor.getName() === 'topLeft'; });
+            var topRight = anchors.find(function (anchor) { return anchor.getName() === 'topRight'; });
+            var bottomRight = anchors.find(function (anchor) { return anchor.getName() === 'bottomRight'; });
+            var bottomLeft = anchors.find(function (anchor) { return anchor.getName() === 'bottomLeft'; });
+
+            topLeft.position({ x: image.x(), y: image.y() });
+            topRight.position({ x: image.x() + image.width(), y: image.y() });
+            bottomRight.position({ x: image.x() + image.width(), y: image.y() + image.height() });
+            bottomLeft.position({ x: image.x(), y: image.y() + image.height() });
+        }
+
+    </script>
+</body>
+
+</html>
